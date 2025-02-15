@@ -5,12 +5,14 @@
 
 using Buffer = std::vector<std::byte>;
 using Id = uint64_t;
+
 enum class TypeId : Id {
 	Uint,
 	Float,
 	String,
 	Vector
 };
+
 template <typename T, std::enable_if_t<std::is_enum_v<T>>* = nullptr>
 std::ostream& operator<<(std::ostream& stream, const T& type)
 {
@@ -56,17 +58,18 @@ template<template <typename, typename > class T, class _vType, class _aloc_type>
 struct is_vector<T<_vType, _aloc_type>> {
 	static bool const value = true;
 };
+
 template<typename T>
 constexpr bool is_vector_v = is_vector<T>::value;
 
 template<typename valueType, typename T, std::enable_if_t<sizeof(valueType) == 1, bool> = true>
-void vectorInserter(std::vector<valueType>& buf, const T& value)
+void vectorInserter(std::vector<valueType>& buf, const T& value) noexcept
 {
 	buf.insert(buf.end(), reinterpret_cast<const valueType*>(&value), reinterpret_cast<const valueType*>(&value + 1));
 }
 
 template<typename valueType, typename T, std::enable_if_t<sizeof(valueType) == 1, bool> = true>
-void vectorInserter(std::vector<valueType>& buf, const T* valuePtr, size_t length)
+void vectorInserter(std::vector<valueType>& buf, const T* valuePtr, size_t length) noexcept
 {
 	buf.insert(buf.end(), reinterpret_cast<const valueType*>(valuePtr), reinterpret_cast<const valueType*>(valuePtr) + length);
 }
@@ -77,23 +80,21 @@ template<typename DerivedType, typename dataValue, TypeId typeId>
 class Serialazible
 {
 private:
-	TypeId type{ typeId };
-	dataValue value{};
+	inline static TypeId type{ typeId };
+protected:
 public:
-	TypeId getType() const { return typeId; }
+	dataValue value{};
+	static TypeId getType() noexcept { return typeId; }
 
-	const dataValue& getValue() const { return value; }
+	const dataValue& getValue() const noexcept { return value; }
 
-
-	uint64_t getLength() const {
-		if constexpr (is_iterable_v<dataValue>)
-			return value.size();
-		else
-			return 0;
+	template<typename T = dataValue, std::enable_if_t<is_iterable_v<T>, bool> = true>
+	size_t getLength() const noexcept
+	{
+		return value.size();
 	};
 
-
-	Buffer serialize() const {
+	Buffer serialize() const noexcept {
 		Buffer b;
 		if constexpr (is_iterable_v<dataValue>)
 		{
@@ -102,7 +103,7 @@ public:
 				vectorInserter(b, type);
 				vectorInserter(b, size);
 				if constexpr (is_vector_v<dataValue>)
-					for (const auto* anyItem : value)
+					for (const auto& anyItem : value)
 					{
 						anyItem.serialize(b);
 					}
@@ -120,11 +121,43 @@ public:
 		return b;
 	}
 
+	static DerivedType deserialize(Buffer::const_iterator& _begin, Buffer::const_iterator _end)
+	{
+		DerivedType _ret;
+		dataValue _value{};
+		_begin += sizeof(TypeId);
+		if constexpr (is_iterable_v<dataValue>)
+		{
+			uint64_t length = *reinterpret_cast<const uint64_t*>(&(*_begin));
+			_begin += sizeof(uint64_t);
+			if constexpr (is_vector_v<dataValue>)
+			{
+				for (uint64_t _indx = 0; _indx < length; ++_indx)
+				{
+					typename dataValue::value_type itm{};
+					_begin = itm.deserialize(_begin, _end);
+					auto typeAnyPlaseholder = itm.getPayloadTypeId();
+					_value.emplace_back(itm.getValue<typeAnyPlaseholder>());
+				}
+			}
+			else
+			{
+				_value = (reinterpret_cast<const char*>(&(*_begin)), length);
+				_begin += length;
+			}
+		}
+		else
+		{
+			_value = *reinterpret_cast<const datavalue*>(&(*_begin));
+			_begin += sizeof(datavalue);
+		}
+
+		_ret.value = _value;
+		return _ret;
+	}
 
 protected:
 	Serialazible() = default;
 	Serialazible(dataValue&& value) :value(std::forward<dataValue>(value)) {};
-	Serialazible(const dataValue& value) :value(value) {}
+	Serialazible(const dataValue& value) :value(value) {};
 };
-
-
